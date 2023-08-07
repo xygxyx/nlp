@@ -2,7 +2,7 @@ import pandas as pd
 from bs4 import BeautifulSoup
 import os,requests,tarfile
 
-# Download and unpack
+# Download and unpack XML tar.gz Dataset
 def download_dataset(url):
     filename = os.path.basename(url)
     response = requests.get(url, stream=True)
@@ -38,17 +38,17 @@ def xml_to_csv(dataset):
                 
                 for review_tag in review_tags:
                     # Initialize a dictionary to store subtag values
-                    subtag_values = {'category': category, 'sentiment_class': sentiment_class}
+                    field_values = {'category': category, 'sentiment_class': sentiment_class}
                     
-                    # Find all custom, non-HTML tags within the review_tag
-                    subtags = review_tag.find_all(recursive=False)
+                    # Find all fields stored in flat review tag hierarchy
+                    fields = review_tag.find_all(recursive=False)
                     
-                    for subtag in subtags:
+                    for field in fields:
                         # Store subtag name and value. cleanup htm <br> etc. and normalize whitespace. 
-                        subtag_values[subtag.name] = ' '.join(subtag.get_text().split()).strip()
+                        field_values[field.name] = ' '.join(field.get_text().split()).strip()
                         
                     # Append the dictionary to the data list
-                    data.append(subtag_values)
+                    data.append(field_values)
 
     # Convert the list of dictionaries into a pandas DataFrame
     df = pd.DataFrame(data)
