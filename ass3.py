@@ -1,6 +1,6 @@
-import pandas as pd
 from bs4 import BeautifulSoup
 import os,requests,tarfile
+import pandas as pd
 
 # Download and unpack XML tar.gz Dataset
 def download_dataset(url):
@@ -13,6 +13,12 @@ def download_dataset(url):
     tar.extractall()
     tar.close()
     os.remove(filename)
+
+# Here we cleanup text to prepare it for load to neural network
+def cleanup_text(text):
+    
+    # merge spaces remove lines.
+    return ' '.join(text.split()).strip()
 
 # Convert Dataset from Dirs with XML list files to easy and fast to load CSV
 def xml_to_csv(dataset):
@@ -45,7 +51,7 @@ def xml_to_csv(dataset):
                     
                     for field in fields:
                         # Store subtag name and value. cleanup htm <br> etc. and normalize whitespace. 
-                        field_values[field.name] = ' '.join(field.get_text().split()).strip()
+                        field_values[field.name] = cleanup_text(field.get_text())
                         
                     # Append the dictionary to the data list
                     data.append(field_values)
@@ -59,13 +65,14 @@ def xml_to_csv(dataset):
     df.to_csv(dataset+'.csv', index=False)
     return df
 
+
 # Download and unpack Dataset in its custom concatenated XML's in dir structures 
 download_dataset('https://www.cs.jhu.edu/~mdredze/datasets/sentiment/domain_sentiment_data.tar.gz')
 
 dir = 'sorted_data_acl'
 
-# Load the CSV file into a DataFrame, Create it from XML's in dirs for first time if needed
-df=xml_to_csv(dir) if not os.path.exists(dir+'.csv') else pd.read_csv(dir+'.csv')
+# Load the CSV file into a DataFrame if it exists, or create it from XML's in dirs for first time
+df = pd.read_csv(dir+'.csv') if os.path.exists(dir+'.csv') else xml_to_csv(dir)
     
 # Print the DataFrame
 print(df)
