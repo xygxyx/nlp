@@ -123,8 +123,23 @@ if not os.path.isdir(dir):
 df = pd.read_csv(dir+'.csv') if os.path.exists(dir+'.csv') else xml_to_csv(dir)
 
 
-# Keep only the training important columns
-df = df.filter(['sentiment_class','date','rating','title','review_text','category'])
+# Keep only for the training important columns
+df = df.filter('category','date','rating','title','review_text','sentiment_class')
+print(df)
+
+# expand embedding vectors to additional new 384 input neurons
+for i in range(len(df['title'].iloc[0])):
+    df[f'title_{i}'] = df['title'].apply(lambda x: x[i])
+
+# expand embedding vectors to additional new 384 input neurons
+for i in range(len(df['review_text'].iloc[0])):
+    df[f'review_text_{i}'] = df['review_text'].apply(lambda x: x[i])
+
+# Remove embedding storages
+df = df.drop(['title', 'review_text'], axis=1)
+
+# Display the resulting DataFrame
+print(df)
 
 # Move the 'sentiment_class' column to the last position so it can be excluded from training
 df.insert(len(df.columns), 'sentiment_class', df.pop('sentiment_class'))
@@ -153,13 +168,15 @@ test_loader = DataLoader(test_data, batch_size=32, shuffle=True)
 # Define the neural network
 class Net(nn.Module):
     def __init__(self):
-        super(Net, self).__init__()
-        self.fc1 = nn.Linear(len(df.columns) - 1, 64)
-        self.fc2 = nn.Linear(64, 32)
-        self.fc3 = nn.Linear(32, len(df['sentiment_class'].unique()))
+        super(Net, self).__init__(); ins=len(df.columns)
+        self.fc1 = nn.Linear(ins - 1   , int(ins/4))
+        self.fc2 = nn.Linear(int(ins/4), int(ins/8))
+        self.fc2 = nn.Linear(int(ins/8), int(ins/16))
+        self.fc3 = nn.Linear(int(ins/16), 1)
 
     def forward(self, x):
         x = torch.relu(self.fc1(x))
+        x = torch.relu(self.fc2(x))
         x = torch.relu(self.fc2(x))
         x = self.fc3(x)
         return x
