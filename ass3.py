@@ -1,24 +1,55 @@
+import pandas as pd
 from bs4 import BeautifulSoup
+import os
 
-# Create an empty list to store the objects
-objects = []
+dir = 'sorted_data_acl'
 
-# Open the XML file
-fname='books/negative.review'
+def xml_to_csv(dataset):
+    # Initialize an empty list to store rows
+    data = []
 
-# Open the HTML file
-with open(fname, 'r') as file:
-    # Parse the HTML file using BeautifulSoup
-    soup = BeautifulSoup(file, 'html.parser')
+    # Walk through the directory
+    for dirpath, dirnames, filenames in os.walk(dataset):
+        for filename in filenames:
+            # Check if the file is a .review file
+            if filename.endswith('.review'):
+                # Extract category from the directory name
+                category = os.path.basename(dirpath)
+                # Extract sentiment class from the file name
+                sentiment_class = filename.split('.')[0]
+                
+                # Open and parse the HTML file
+                with open(os.path.join(dirpath, filename), 'r') as file:
+                    soup = BeautifulSoup(file, 'html.parser')
+                    
+                # Find all review tags
+                review_tags = soup.find_all('review')
+                
+                for review_tag in review_tags:
+                    # Initialize a dictionary to store subtag values
+                    subtag_values = {'category': category, 'sentiment_class': sentiment_class}
+                    
+                    # Find all custom, non-HTML tags within the review_tag
+                    subtags = review_tag.find_all(recursive=False)
+                    
+                    for subtag in subtags:
+                        # Store subtag name and value. cleanup htm <br> etc. and normalize whitespace. 
+                        subtag_values[subtag.name] = ' '.join(subtag.get_text().split()).strip()
+                        
+                    # Append the dictionary to the data list
+                    data.append(subtag_values)
 
-# Find the title element of the HTML page
-ob=[]
-for r in soup.findAll('review'):
-    o={}
-    # Print the text of the title element
-    for ch in r.find_all(recursive=False):
-    # Get the tag name and content of the child element
-        o[ch.name]=ch.text.strip()
-    ob.append(o)
+    # Convert the list of dictionaries into a pandas DataFrame
+    df = pd.DataFrame(data)
 
-a=0
+    # Convert columns to numeric where possible
+    df = df.apply(pd.to_numeric, errors='ignore')
+
+    df.to_csv(dataset+'.csv', index=False)
+    return df
+
+# Load the CSV file into a DataFrame, Create it from XML's in dirs for first time if needed
+df=xml_to_csv(dir) if not os.path.exists(dir+'.csv') else pd.read_csv(dir+'.csv')
+    
+# Print the DataFrame
+print(df)
