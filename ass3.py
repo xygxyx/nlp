@@ -97,11 +97,18 @@ def xml_to_csv(dataset):
     mm = MinMaxScaler(); le = LabelEncoder()
 
     # Fit the 'date' column from 0 to 1 so net can track and learn potential seasonal moods
-    df['date'] = mm.fit_transform(df[['date']])
+    df['date'] = mm.fit_transform(df['date'])
 
-    # Fit the 'sentiment_class' column to numerical values from 0 to 1
+    # Convert and Fit the 'sentiment_class' column to numerical values from 0 to 1
     df['sentiment_class'] = le.fit_transform(df['sentiment_class'])
-    df['sentiment_class'] = mm.fit_transform(df[['sentiment_class']])
+    df['sentiment_class'] = mm.fit_transform(df['sentiment_class'])
+
+    # Convert and Fit the 'category' column to numerical values from 0 to 1
+    df['category'] = le.fit_transform(df['category'])
+    df['category'] = mm.fit_transform(df['category'])
+
+    # Fit the 'rating' column to numerical values from 0 to 1
+    df['rating'] = mm.fit_transform(df['rating'])
 
     df.to_csv(dataset+'.csv', index=False)
     return df
@@ -114,6 +121,72 @@ if not os.path.isdir(dir):
 
 # Load the CSV file into a DataFrame if it exists, or create it from XML's in dirs for first time
 df = pd.read_csv(dir+'.csv') if os.path.exists(dir+'.csv') else xml_to_csv(dir)
-    
-# Print the DataFrame
-print(df)
+
+
+# Keep only the training important columns
+df = df.filter(['sentiment_class','date','rating','title','review_text','category'])
+
+# Move the 'sentiment_class' column to the last position so it can be excluded from training
+df.insert(len(df.columns), 'sentiment_class', df.pop('sentiment_class'))
+
+# Split the data into training and test sets
+train, test = train_test_split(df, test_size=0.2)
+
+# Define a custom dataset
+class ReviewDataset(Dataset):
+    def __init__(self, data):
+        self.data = data
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        return torch.tensor(self.data.iloc[idx, :-1].values, dtype=torch.float), torch.tensor(self.data.iloc[idx, -1], dtype=torch.long)
+
+# Create data loaders
+train_data = ReviewDataset(train)
+test_data = ReviewDataset(test)
+
+train_loader = DataLoader(train_data, batch_size=32, shuffle=True)
+test_loader = DataLoader(test_data, batch_size=32, shuffle=True)
+
+# Define the neural network
+class Net(nn.Module):
+    def __init__(self):
+        super(Net, self).__init__()
+        self.fc1 = nn.Linear(len(df.columns) - 1, 64)
+        self.fc2 = nn.Linear(64, 32)
+        self.fc3 = nn.Linear(32, len(df['sentiment_class'].unique()))
+
+    def forward(self, x):
+        x = torch.relu(self.fc1(x))
+        x = torch.relu(self.fc2(x))
+        x = self.fc3(x)
+        return x
+
+# Initialize the network, the optimizer and the loss function
+model = Net()
+optimizer = optim.Adam(model.parameters(), lr=0.001)
+criterion = nn.CrossEntropyLoss()
+
+# Train the network
+for epoch in range(100):  # number of epochs
+    for inputs, labels in train_loader:
+        optimizer.zero_grad()
+        outputs = model(inputs)
+        loss = criterion(outputs, labels)
+        loss.backward()
+        optimizer.step()
+
+# Test the network
+model.eval()
+with torch.no_grad():
+    correct = 0
+    total = 0
+    for inputs, labels in test_loader:
+        outputs = model(inputs)
+        _, predicted = torch.max(outputs.data, 1)
+        total += labels.size(0)
+        correct += (predicted == labels).sum().item()
+
+print('Accuracy: %d %%' % (100 * correct / total))
