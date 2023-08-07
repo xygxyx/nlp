@@ -1,0 +1,9 @@
+# Ignore all subdirectories and their contents
+*/
+
+# Ignore all files
+*
+
+# Unignore .csv and .py files
+!*.csv
+!*.py

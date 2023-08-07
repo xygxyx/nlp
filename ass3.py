@@ -1,9 +1,20 @@
 import pandas as pd
 from bs4 import BeautifulSoup
-import os
+import os,requests,tarfile
 
-dir = 'sorted_data_acl'
+# Download and unpack
+def download_dataset(url):
+    filename = os.path.basename(url)
+    response = requests.get(url, stream=True)
+    if response.status_code == 200:
+        with open(filename, 'wb') as f:
+            f.write(response.raw.read())
+    tar = tarfile.open(filename, "r:gz")
+    tar.extractall()
+    tar.close()
+    os.remove(filename)
 
+# Convert Dataset from Dirs with XML list files to easy and fast to load CSV
 def xml_to_csv(dataset):
     # Initialize an empty list to store rows
     data = []
@@ -47,6 +58,11 @@ def xml_to_csv(dataset):
 
     df.to_csv(dataset+'.csv', index=False)
     return df
+
+# Download and unpack Dataset in its custom concatenated XML's in dir structures 
+download_dataset('https://www.cs.jhu.edu/~mdredze/datasets/sentiment/domain_sentiment_data.tar.gz')
+
+dir = 'sorted_data_acl'
 
 # Load the CSV file into a DataFrame, Create it from XML's in dirs for first time if needed
 df=xml_to_csv(dir) if not os.path.exists(dir+'.csv') else pd.read_csv(dir+'.csv')
