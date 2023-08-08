@@ -1,4 +1,4 @@
-import os,requests,tarfile,torch
+import os,requests,tarfile,torch,sys
 from dateutil import parser
 from bs4 import BeautifulSoup
 from sentence_transformers import SentenceTransformer
@@ -68,6 +68,9 @@ def read_xml_dataset(dataset):
                         # Convert htm <br> etc to text. but not normalize whitespace just yet. 
                         field_values[field.name] = field.get_text().strip()
 
+                    field_values['title']           = ' '.join(field_values['title'      ].split()).strip()
+                    field_values['review_text']     = ' '.join(field_values['review_text'].split()).strip()
+                    
                     # calc fixed size vector of in this case 384 numbers = embedding for given text
                     field_values['title_emb']       = ':'.join([str(x) for x in list(model.encode(field_values['title']))])
                     field_values['review_text_emb'] = ':'.join([str(x) for x in list(model.encode(field_values['review_text']))])
@@ -87,7 +90,7 @@ def prepare_field(name,val,i,df):
         if  'of' in str(val):
             a,b=str(val).split('of'); a=int(a); b=int(b)
             ratio=a/b; agreed=int(b*ratio); disagreed=b-agreed
-            rating=int(df.loc[i,'rating'])
+            rating=int(float(df.loc[i,'rating']))
 
             # Say 1000 people agreed and 1000 disagreed and rating was 2 stars
             # so we add 2000 2 star ratings and substract as well thus having no impact  
@@ -103,7 +106,7 @@ def prepare_field(name,val,i,df):
             pass
 
     # merge spaces remove lines.
-    if name in ['title','review_text']:
+    if name in ['title_emb','review_text_emb']:
 
         # only now normalize whitespace = multiple spaces to one and remove eol's. 
         # since sometimes we are losing info this way so we delayed this decision and stored raw text in csv
@@ -117,11 +120,10 @@ def prepare_dataset(df):
     df = df[df['sentiment'] != 'unlabeled']
 
     # Keep only for the training important columns
-    df = df.filter(items=['index','category','date','rating','helpful','title','review_text','sentiment'])
+    df = df.filter(items=['index','category','date','rating','helpful','title_emb','review_text_emb','sentiment'])
 
-    
     # missing review text is fine as is title or helpfull. they are all just additional info
-    fields = ['helpful','title','category','review_text']
+    fields = ['helpful','category']
     df[fields] = df[fields].fillna('')
 
     # Drop rows but only where important rating field is missing missing rest is ok
@@ -184,6 +186,7 @@ else:
     # Or create it from XML's in dirs and cache it in processed csv for faster next load of raw texts
     df = read_xml_dataset(dir)
     df.to_csv(dir+'.csv', index=False)
+    sys.exit()
 
 # Convert to 0 - 1 normalized numbers processible by nn
 df = prepare_dataset(df)
