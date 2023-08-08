@@ -249,7 +249,7 @@ for epoch in range(num_epochs):  # number of epochs
         if loss.item() < minloss:
             minloss=loss.item()
         if batch % print_every == 0:  # print_every can be, e.g., 10 to print every 10 batches
-            print(f"Epoch [{epoch+1}/{num_epochs}], Batch [{batch}/{len(train_loader)}], Loss: {minloss:.8f}",'                                                 ',end='\r')
+            print(f"Epoch [{epoch+1}/{num_epochs}], Batch [{batch}/{len(train_loader)}], Loss: {minloss:.16f}",'                                                 ',end='\r')
 
 # Test the network
 model.eval()
