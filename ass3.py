@@ -126,7 +126,7 @@ def prepare_dataset(df):
 
     # Here we would normally randomize the rows order once to prevent nonuniformities introduced during collection to cause issues
     # but pythorch does this every epoch via shuffle param which is way more efficient
-    # df = df.sample(frac=1).reset_index(drop=True)
+    df = df.sample(frac=1).reset_index(drop=True)
  
     # Create scalers
     mm = MinMaxScaler(); le = LabelEncoder()
@@ -150,7 +150,7 @@ def prepare_dataset(df):
 
 dir = 'sorted_data_acl'
 
-# If needed download and unpack Dataset in its custom concatenated XML's in dir structures 
+# If needed download and unpack Dataset 8000 rows in its custom concatenated XML's in dir structures 
 if not os.path.isdir(dir):
     download_dataset('https://www.cs.jhu.edu/~mdredze/datasets/sentiment/domain_sentiment_data.tar.gz')
 
@@ -189,8 +189,10 @@ for field in ['title','review_text']:
 o=df.pop('sentiment')
 df.insert(len(df.columns), 'sentiment',o )
 
+df = df.dropna(how='any')
+
 # Split the data into training and test sets
-train, test = train_test_split(df, test_size=0.2)
+train, test = train_test_split(df, test_size=0.3)
 
 # Define a custom dataset
 class ReviewDataset(Dataset):
@@ -206,9 +208,9 @@ class ReviewDataset(Dataset):
 # Create data loaders
 train_data = ReviewDataset(train); 
 test_data  = ReviewDataset(test);  
-
-train_loader = DataLoader(train_data, batch_size=32, shuffle=True)
-test_loader  = DataLoader(test_data,  batch_size=32, shuffle=True)
+batch_size = 8
+train_loader = DataLoader(train_data, batch_size=batch_size, shuffle=False)
+test_loader  = DataLoader(test_data,  batch_size=batch_size, shuffle=False)
 
 # Define the neural network
 class Net(nn.Module):
@@ -223,18 +225,19 @@ class Net(nn.Module):
         x = torch.relu(self.fc1(x))
         x = torch.relu(self.fc2(x))
         x = torch.relu(self.fc3(x))
-        x = self.fc4(x)
+        x = torch.sigmoid(self.fc4(x))
         return x
     
 # Initialize the network, the optimizer and the loss function
 model = Net()
-optimizer = optim.Adam(model.parameters(), lr=0.001)
+optimizer = optim.Adam(model.parameters(), lr=0.01)
 criterion = nn.BCEWithLogitsLoss()
-print_every = 1
-num_epochs = 10
+print_every = 100
+num_epochs = 100
 batch = 0
 
 # Train the network
+model.train()  # Set the model to training mode
 for epoch in range(num_epochs):  # number of epochs
     for inputs, labels in train_loader:
         batch+=1
@@ -244,7 +247,7 @@ for epoch in range(num_epochs):  # number of epochs
         loss.backward()
         optimizer.step()
         if batch % print_every == 0:  # print_every can be, e.g., 10 to print every 10 batches
-            print(f"Epoch [{epoch+1}/{num_epochs}], Batch [{batch}/{len(train_loader)}], Loss: {loss.item():.4f}",'                                                 ',end='\r')
+            print(f"Epoch [{epoch+1}/{num_epochs}], Batch [{batch}/{len(train_loader)}], Loss: {loss.item():.8f}",'                                                 ',end='\r')
 
 # Test the network
 model.eval()
@@ -253,7 +256,7 @@ with torch.no_grad():
     total = 0
     for inputs, labels in test_loader:
         outputs = model(inputs)
-        outputs = torch.sigmoid(outputs)
+        #outputs = torch.sigmoid(outputs)
         predicted = (outputs > 0.5).float().view(-1)
         total += labels.size(0)
         correct += (predicted == labels).sum().item()
