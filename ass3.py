@@ -165,7 +165,7 @@ else:
 # Convert to 0 - 1 normalized numbers processible by nn
 df = prepare_dataset(df)
 
-# Load embeding vectors precalculated from text fields
+# Load two 374 floats embeding vectors precalculated from two input text fields title and review text
 for field in ['title','review_text']:
     if os.path.isfile(field+'.emb'):
         with open(field+'.emb','rb') as file:
@@ -229,16 +229,22 @@ class Net(nn.Module):
 # Initialize the network, the optimizer and the loss function
 model = Net()
 optimizer = optim.Adam(model.parameters(), lr=0.001)
-criterion = nn.CrossEntropyLoss()
+criterion = nn.BCEWithLogitsLoss()
+print_every = 1
+num_epochs = 10
+batch = 0
 
 # Train the network
-for epoch in range(100):  # number of epochs
+for epoch in range(num_epochs):  # number of epochs
     for inputs, labels in train_loader:
+        batch+=1
         optimizer.zero_grad()
         outputs = model(inputs)
-        loss = criterion(outputs, labels)
+        loss = criterion(outputs.view(-1), labels)
         loss.backward()
         optimizer.step()
+        if batch % print_every == 0:  # print_every can be, e.g., 10 to print every 10 batches
+            print(f"Epoch [{epoch+1}/{num_epochs}], Batch [{batch}/{len(train_loader)}], Loss: {loss.item():.4f}",'                                                 ',end='\r')
 
 # Test the network
 model.eval()
@@ -247,7 +253,8 @@ with torch.no_grad():
     total = 0
     for inputs, labels in test_loader:
         outputs = model(inputs)
-        _, predicted = torch.max(outputs.data, 1)
+        outputs = torch.sigmoid(outputs)
+        predicted = (outputs > 0.5).float().view(-1)
         total += labels.size(0)
         correct += (predicted == labels).sum().item()
 
