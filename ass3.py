@@ -1,4 +1,4 @@
-import os,requests,tarfile,torch,sys
+import os,requests,tarfile,torch,sys,pickle
 from dateutil import parser
 from bs4 import BeautifulSoup
 from sentence_transformers import SentenceTransformer
@@ -6,6 +6,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
 from sklearn.preprocessing import MinMaxScaler
 from torch.utils.data import Dataset, DataLoader
+import numpy as np
 from torch import nn, optim
 import pandas as pd
 
@@ -64,16 +65,7 @@ def read_xml_dataset(dataset):
 
                     # Extract field name and value.
                     for field in fields:
-                        
-                        # Convert htm <br> etc to text. but not normalize whitespace just yet. 
                         field_values[field.name] = field.get_text().strip()
-
-                    field_values['title']           = ' '.join(field_values['title'      ].split()).strip()
-                    field_values['review_text']     = ' '.join(field_values['review_text'].split()).strip()
-                    
-                    # calc fixed size vector of in this case 384 numbers = embedding for given text
-                    field_values['title_emb']       = ':'.join([str(x) for x in list(model.encode(field_values['title']))])
-                    field_values['review_text_emb'] = ':'.join([str(x) for x in list(model.encode(field_values['review_text']))])
 
                     # Append the dictionary to the data list
                     data.append(field_values)
@@ -82,45 +74,14 @@ def read_xml_dataset(dataset):
     df = pd.DataFrame(data)
     return df
 
-# Here we convert all fields to numbers normalized to 0 - 1 to prepare it for load to neural network
-def prepare_field(name,val,i,df): 
-
-    # multiply rating. if it was deemed helpfull substract that rating that many times otherwise
-    if name == 'helpful' :
-        if  'of' in str(val):
-            a,b=str(val).split('of'); a=int(a); b=int(b)
-            ratio=a/b; agreed=int(b*ratio); disagreed=b-agreed
-            rating=int(float(df.loc[i,'rating']))
-
-            # Say 1000 people agreed and 1000 disagreed and rating was 2 stars
-            # so we add 2000 2 star ratings and substract as well thus having no impact  
-            df.loc[i,'rating']+=agreed*rating
-            df.loc[i,'rating']-=disagreed*rating
-        
-    # convert date strings in '14 nov, 2006' format to simple rising integer as seconds since epoch
-    # so nn can observe and learn date weather etc related seasonal moods from data
-    if name == 'date':
-        try:
-            val = parser.parse(str(val)).timestamp()
-        except:
-            pass
-
-    # merge spaces remove lines.
-    if name in ['title_emb','review_text_emb']:
-
-        # only now normalize whitespace = multiple spaces to one and remove eol's. 
-        # since sometimes we are losing info this way so we delayed this decision and stored raw text in csv
-        val = ' '.join(str(val).split()).strip()
-    return val
-
 # Here we reduce and convert all dataset fields to numbers to prepare it for load to neural network
 def prepare_dataset(df):
 
-    # Drop rows where the 'sentiment' column is equal to 'unlabeled' = from 72k to 8k rows
-    df = df[df['sentiment'] != 'unlabeled']
-
     # Keep only for the training important columns
     df = df.filter(items=['index','category','date','rating','helpful','title_emb','review_text_emb','sentiment'])
+    
+    # Rename emb columns
+    df = df.rename(columns={'title_emb':'title','review_text_emb':'review'})
 
     # missing review text is fine as is title or helpfull. they are all just additional info
     fields = ['helpful','category']
@@ -133,10 +94,35 @@ def prepare_dataset(df):
     # Reset the index of the DataFrame after deleting rows. So we can iterate linearly again
     df = df.reset_index(drop=True)
 
-    # convert all fields differently some are numbers. convert texts to embeddings
+    # process / convert all fields differently some are in need of complex funcs some are dates in strings.
     for column in df:
         for i in range(len(df)):
-            df.loc[i,column] = prepare_field(column,df.loc[i,column],i,df)
+            val = df.loc[i,column] 
+
+            # multiply rating. if it was deemed helpfull substract that rating that many times otherwise
+            if column == 'helpful' and 'of' in str(val):
+                a,b=str(val).split('of'); a=int(a); b=int(b)
+                ratio=a/b; agreed=int(b*ratio); disagreed=b-agreed
+                rating=int(float(df.loc[i,'rating']))
+
+                # Say 1000 people agreed and 1000 disagreed and rating was 2 stars
+                # so we add 2000 2 star ratings and substract as well thus having no impact  
+                df.loc[i,'rating']+=agreed*rating
+                df.loc[i,'rating']-=disagreed*rating
+                
+            # convert date strings in '14 nov, 2006' format to simple rising integer as seconds since epoch
+            # so nn can observe and learn date weather etc related seasonal moods from data
+            if column == 'date':
+                try:
+                    val = parser.parse(str(val)).timestamp()
+                except:
+                    pass        
+            
+            df.loc[i,column] = val
+
+    # Drop the no longer needed string column 'helpful' from the DataFrame
+    df = df.drop('helpful', axis=1)
+        
 
     # Here we would normally randomize the rows order once to prevent nonuniformities introduced during collection to cause issues
     # but pythorch does this every epoch via shuffle param which is way more efficient
@@ -149,26 +135,15 @@ def prepare_dataset(df):
     df['date'] = mm.fit_transform(df['date'].values.reshape(-1, 1))
 
     # Convert and Fit the 'sentiment' column to numerical values from 0 to 1
-    df['sentiment'] = le.fit_transform(df['sentiment'].values.reshape(-1, 1))
+    df['sentiment'] = le.fit_transform(df['sentiment'])
     df['sentiment'] = mm.fit_transform(df['sentiment'].values.reshape(-1, 1))
 
     # Convert and Fit the 'category' column to numerical values from 0 to 1
-    df['category'] = le.fit_transform(df['category'].values.reshape(-1, 1))
+    df['category'] = le.fit_transform(df['category'])
     df['category'] = mm.fit_transform(df['category'].values.reshape(-1, 1))
 
     # Fit the 'rating' column to numerical values from 0 to 1
     df['rating'] = mm.fit_transform(df['rating'].values.reshape(-1, 1))
-
-    # expand embedding vectors from 2 text fields to 2x additional new 384 input neurons
-    for field in ['title','review_text']:
-        for i in range(len(df[field].iloc[0])):
-            df[f'{field}_{i}'] = df[field].apply(lambda x: x[i])
-
-        # Remove no longer needed embedding storage arrays not passable to nn
-        df = df.drop([field], axis=1)
-
-    # Move the 'sentiment' column to the last position so it can now be properly excluded from training
-    df.insert(len(df.columns), 'sentiment', df.pop('sentiment'))
     return df
 
 
@@ -179,17 +154,40 @@ dir = 'sorted_data_acl'
 if not os.path.isdir(dir):
     download_dataset('https://www.cs.jhu.edu/~mdredze/datasets/sentiment/domain_sentiment_data.tar.gz')
 
-# Load the CSV file into a DataFrame if it exists, 
-if os.path.exists(dir+'.csv'):
+# Load the CSV file with raw texts into a DataFrame if it exists, 
+if os.path.isfile(dir+'.csv'):
     df = pd.read_csv(dir+'.csv') 
 else:
     # Or create it from XML's in dirs and cache it in processed csv for faster next load of raw texts
     df = read_xml_dataset(dir)
     df.to_csv(dir+'.csv', index=False)
-    sys.exit()
 
 # Convert to 0 - 1 normalized numbers processible by nn
 df = prepare_dataset(df)
+
+# Load embeding vectors precalculated from text fields
+for field in ['title','review_text']:
+    if os.path.isfile(field+'.emb'):
+        with open(field+'.emb','rb') as file:
+            ed=pickle.load(file)
+            ed.reset_index(drop=True, inplace=True)
+            df.reset_index(drop=True, inplace=True)
+            newcols=list(df.columns)+list(ed.columns)
+
+            # Append 384 new embeding cols to our DataFrame
+            df = pd.concat([df, ed],axis=1,ignore_index=True,)
+            df.columns = newcols
+    else:
+        # Or calculate and cache them
+        e = model.encode(df[field])
+        ed = pd.DataFrame(e)
+        ed.columns = [f'{field[0]}{i}' for i in range(len(e[0]))]
+        with open(field+'.emb','wb') as file:
+            pickle.dump(ed,file)
+
+# Move the 'sentiment' column to the last position so it can now be properly excluded from training
+o=df.pop('sentiment')
+df.insert(len(df.columns), 'sentiment',o )
 
 # Split the data into training and test sets
 train, test = train_test_split(df, test_size=0.2)
@@ -203,28 +201,31 @@ class ReviewDataset(Dataset):
         return len(self.data)
 
     def __getitem__(self, idx):
-        return torch.tensor(self.data.iloc[idx, :-1].values, dtype=torch.float), torch.tensor(self.data.iloc[idx, -1], dtype=torch.long)
+        return torch.tensor(self.data.iloc[idx, :-1].values, dtype=torch.float), torch.tensor(self.data.iloc[idx, -1], dtype=torch.float)
 
 # Create data loaders
-train_data = ReviewDataset(train); train_loader = DataLoader(train_data, batch_size=32, shuffle=True)
-test_data  = ReviewDataset(test);  test_loader  = DataLoader(test_data,  batch_size=32, shuffle=True)
+train_data = ReviewDataset(train); 
+test_data  = ReviewDataset(test);  
+
+train_loader = DataLoader(train_data, batch_size=32, shuffle=True)
+test_loader  = DataLoader(test_data,  batch_size=32, shuffle=True)
 
 # Define the neural network
 class Net(nn.Module):
     def __init__(self):
-        super(Net, self).__init__(); ins=len(df.columns)
-        self.fc1 = nn.Linear(ins - 1   , int(ins/4))
-        self.fc2 = nn.Linear(int(ins/4), int(ins/8))
-        self.fc2 = nn.Linear(int(ins/8), int(ins/16))
-        self.fc3 = nn.Linear(int(ins/16), 1)
+        super(Net, self).__init__(); ins=len(df.columns)-1
+        self.fc1 = nn.Linear(ins, 512)
+        self.fc2 = nn.Linear(512, 256)
+        self.fc3 = nn.Linear(256, 128)
+        self.fc4 = nn.Linear(128, 1)
 
     def forward(self, x):
         x = torch.relu(self.fc1(x))
         x = torch.relu(self.fc2(x))
-        x = torch.relu(self.fc2(x))
-        x = self.fc3(x)
+        x = torch.relu(self.fc3(x))
+        x = self.fc4(x)
         return x
-
+    
 # Initialize the network, the optimizer and the loss function
 model = Net()
 optimizer = optim.Adam(model.parameters(), lr=0.001)
