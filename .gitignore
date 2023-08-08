@@ -4,5 +4,6 @@
 # Ignore all files
 *
 
-# Unignore .py files
+# Unignore .csv .py files
 !*.py
+!*.csv

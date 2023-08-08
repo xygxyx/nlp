@@ -23,10 +23,10 @@ def download_dataset(url):
     tar.close()
     os.remove(filename)
 
-# Convert Dataset from Dirs with XML list files to easy and fast to load but raw text CSV
-def xml_to_csv(dataset):
+# Read Dataset from Dirs with XML list files
+def read_xml_dataset(dataset):
     # Initialize an empty list to store rows
-    data = []
+    data = []; k=0
 
     # Walk through the directory
     for dirpath, dirnames, filenames in os.walk(dataset):
@@ -40,6 +40,11 @@ def xml_to_csv(dataset):
 
                 # Extract sentiment class from the file name
                 sentiment = filename.split('.')[0]
+
+                # we skip bulk 72k of unlabeled data since embeding 
+                # saved in this csv for them is slow and not needed for training
+                if sentiment not in ['positive','negative']:
+                    continue
                 
                 # Open and parse list of concatenated XML files that only HTML parser can handle
                 with open(os.path.join(dirpath, filename), 'r') as file:
@@ -47,8 +52,9 @@ def xml_to_csv(dataset):
                     
                 # Find all review tags
                 review_tags = soup.find_all('review')
-                
+
                 for review_tag in review_tags:
+                    print(k,'embedding',dirpath,filename,'            ',end='\r'); k+=1
 
                     # Extract field values from dir and file names
                     field_values = {'category': category, 'sentiment': sentiment}
@@ -56,101 +62,103 @@ def xml_to_csv(dataset):
                     # Find all fields stored in flat <review> tag hierarchy
                     fields = review_tag.find_all(recursive=False)
 
-                    # Move helpful as last so it can influence now already processed ratings field
-                    helpful_index = next((i for i, field in enumerate(fields) if field.name == 'helpful'), None)
-                    helpful_field = fields.pop(helpful_index); fields.append(helpful_field)
-                    
                     # Extract field name and value.
                     for field in fields:
                         
-                        # Convert htm <br> etc to text. and normalize whitespace. 
-                        field_values[field.name] = ' '.join(field.get_text().split()).strip()
+                        # Convert htm <br> etc to text. but not normalize whitespace just yet. 
+                        field_values[field.name] = field.get_text().strip()
+
+                    # calc fixed size vector of in this case 384 numbers = embedding for given text
+                    field_values['title_emb']       = ':'.join([str(x) for x in list(model.encode(field_values['title']))])
+                    field_values['review_text_emb'] = ':'.join([str(x) for x in list(model.encode(field_values['review_text']))])
 
                     # Append the dictionary to the data list
                     data.append(field_values)
     
-    # Convert the list of dictionaries into a pandas DataFrame
+    # Convert the list of dictionaries into a pandas DataFrame 
     df = pd.DataFrame(data)
-    df.to_csv(dataset+'.csv', index=False)
     return df
 
-# Here we convert all fields to numbers to prepare it for load to neural network
-def prepare_field(name,text,df):
-    val = text 
-
-    if name == 'rating':
-        val = int(float(text))
+# Here we convert all fields to numbers normalized to 0 - 1 to prepare it for load to neural network
+def prepare_field(name,val,i,df): 
 
     # multiply rating. if it was deemed helpfull substract that rating that many times otherwise
-    if name == 'helpful' and 'rating' in df.columns and 'of' in text:
-        a,b=text.split('of'); a=int(a); b=int(b)
-        ratio=a/b; agreed=int(b*ratio); disagreed=b-agreed
-        rating=int(df['rating'])
+    if name == 'helpful' :
+        if  'of' in str(val):
+            a,b=str(val).split('of'); a=int(a); b=int(b)
+            ratio=a/b; agreed=int(b*ratio); disagreed=b-agreed
+            rating=int(df.loc[i,'rating'])
 
-        # Say 1000 people agreed and 1000 disagreed and rating was 2 stars
-        # so we add 2000 2 star ratings and substract as well thus having no impact  
-        df['rating']+=agreed*rating
-        df['rating']-=disagreed*rating
+            # Say 1000 people agreed and 1000 disagreed and rating was 2 stars
+            # so we add 2000 2 star ratings and substract as well thus having no impact  
+            df.loc[i,'rating']+=agreed*rating
+            df.loc[i,'rating']-=disagreed*rating
         
     # convert date strings in '14 nov, 2006' format to simple rising integer as seconds since epoch
     # so nn can observe and learn date weather etc related seasonal moods from data
     if name == 'date':
         try:
-            val = parser.parse(text).timestamp()
+            val = parser.parse(str(val)).timestamp()
         except:
             pass
 
     # merge spaces remove lines.
     if name in ['title','review_text']:
-        val = ' '.join(text.split()).strip()
 
-        # calc fixed size vector of in this case 384 numbers = embedding for given text
-        #val = model.encode(val)
-
+        # only now normalize whitespace = multiple spaces to one and remove eol's. 
+        # since sometimes we are losing info this way so we delayed this decision and stored raw text in csv
+        val = ' '.join(str(val).split()).strip()
     return val
 
 # Here we reduce and convert all dataset fields to numbers to prepare it for load to neural network
 def prepare_dataset(df):
 
-    # Keep only for the training important columns
-    df = df.filter('category','date','rating','title','review_text','sentiment')
-
-    # Drop incomplete rows 
-    df = df.dropna(how='any')
-
-    # Drop rows where the 'sentiment' column is equal to 'unlabeled'
+    # Drop rows where the 'sentiment' column is equal to 'unlabeled' = from 72k to 8k rows
     df = df[df['sentiment'] != 'unlabeled']
 
-    # Infer the dtypes of the object columns
-    df = df.infer_objects()
-    df = pd.DataFrame({column: pd.to_numeric(df[column], errors='ignore') for column in df})
+    # Keep only for the training important columns
+    df = df.filter(items=['index','category','date','rating','helpful','title','review_text','sentiment'])
+
+    
+    # missing review text is fine as is title or helpfull. they are all just additional info
+    fields = ['helpful','title','category','review_text']
+    df[fields] = df[fields].fillna('')
+
+    # Drop rows but only where important rating field is missing missing rest is ok
+    # i.e if it has rating and angry title but not text etc
+    df = df.dropna(subset=['rating','date'],how='any')
+
+    # Reset the index of the DataFrame after deleting rows. So we can iterate linearly again
+    df = df.reset_index(drop=True)
 
     # convert all fields differently some are numbers. convert texts to embeddings
     for column in df:
-        df[column] = prepare_field(column,df[column],df)
+        for i in range(len(df)):
+            df.loc[i,column] = prepare_field(column,df.loc[i,column],i,df)
 
-    # Randomize the rows to prevent nonuniformities introduced during collection to cause issues
+    # Here we would normally randomize the rows order once to prevent nonuniformities introduced during collection to cause issues
+    # but pythorch does this every epoch via shuffle param which is way more efficient
     # df = df.sample(frac=1).reset_index(drop=True)
-
+ 
     # Create scalers
     mm = MinMaxScaler(); le = LabelEncoder()
 
     # Fit the 'date' column from 0 to 1 so net can track and learn potential seasonal moods
-    df['date'] = mm.fit_transform(df['date'])
+    df['date'] = mm.fit_transform(df['date'].values.reshape(-1, 1))
 
     # Convert and Fit the 'sentiment' column to numerical values from 0 to 1
-    df['sentiment'] = le.fit_transform(df['sentiment'])
-    df['sentiment'] = mm.fit_transform(df['sentiment'])
+    df['sentiment'] = le.fit_transform(df['sentiment'].values.reshape(-1, 1))
+    df['sentiment'] = mm.fit_transform(df['sentiment'].values.reshape(-1, 1))
 
     # Convert and Fit the 'category' column to numerical values from 0 to 1
-    df['category'] = le.fit_transform(df['category'])
-    df['category'] = mm.fit_transform(df['category'])
+    df['category'] = le.fit_transform(df['category'].values.reshape(-1, 1))
+    df['category'] = mm.fit_transform(df['category'].values.reshape(-1, 1))
 
     # Fit the 'rating' column to numerical values from 0 to 1
-    df['rating'] = mm.fit_transform(df['rating'])
+    df['rating'] = mm.fit_transform(df['rating'].values.reshape(-1, 1))
 
-    # expand embedding vectors from 2 tex fields to 2x additional new 384 input neurons
-    for field in ['title','review_text']
+    # expand embedding vectors from 2 text fields to 2x additional new 384 input neurons
+    for field in ['title','review_text']:
         for i in range(len(df[field].iloc[0])):
             df[f'{field}_{i}'] = df[field].apply(lambda x: x[i])
 
@@ -159,21 +167,25 @@ def prepare_dataset(df):
 
     # Move the 'sentiment' column to the last position so it can now be properly excluded from training
     df.insert(len(df.columns), 'sentiment', df.pop('sentiment'))
-
     return df
 
 
 
 dir = 'sorted_data_acl'
 
-# Download and unpack Dataset in its custom concatenated XML's in dir structures 
+# If needed download and unpack Dataset in its custom concatenated XML's in dir structures 
 if not os.path.isdir(dir):
     download_dataset('https://www.cs.jhu.edu/~mdredze/datasets/sentiment/domain_sentiment_data.tar.gz')
 
-# Load the CSV file into a DataFrame if it exists, or create it from XML's in dirs for first time
-df = pd.read_csv(dir+'.csv') if os.path.exists(dir+'.csv') else xml_to_csv(dir)
+# Load the CSV file into a DataFrame if it exists, 
+if os.path.exists(dir+'.csv'):
+    df = pd.read_csv(dir+'.csv') 
+else:
+    # Or create it from XML's in dirs and cache it in processed csv for faster next load of raw texts
+    df = read_xml_dataset(dir)
+    df.to_csv(dir+'.csv', index=False)
 
-# convert to numbers
+# Convert to 0 - 1 normalized numbers processible by nn
 df = prepare_dataset(df)
 
 # Split the data into training and test sets
