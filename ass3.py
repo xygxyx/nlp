@@ -211,7 +211,7 @@ test_data  = ReviewDataset(test);
 batch_size = 8
 train_loader = DataLoader(train_data, batch_size=batch_size, shuffle=False)
 test_loader  = DataLoader(test_data,  batch_size=batch_size, shuffle=False)
-
+minloss = 0 
 # Define the neural network
 class Net(nn.Module):
     def __init__(self):
@@ -225,17 +225,17 @@ class Net(nn.Module):
         x = torch.relu(self.fc1(x))
         x = torch.relu(self.fc2(x))
         x = torch.relu(self.fc3(x))
-        x = torch.sigmoid(self.fc4(x))
+        x = self.fc4(x)
         return x
     
 # Initialize the network, the optimizer and the loss function
 model = Net()
-optimizer = optim.Adam(model.parameters(), lr=0.01)
+optimizer = optim.Adam(model.parameters(), lr=0.001)
 criterion = nn.BCEWithLogitsLoss()
 print_every = 100
 num_epochs = 100
 batch = 0
-
+minloss=2
 # Train the network
 model.train()  # Set the model to training mode
 for epoch in range(num_epochs):  # number of epochs
@@ -246,8 +246,10 @@ for epoch in range(num_epochs):  # number of epochs
         loss = criterion(outputs.view(-1), labels)
         loss.backward()
         optimizer.step()
+        if loss.item() < minloss:
+            minloss=loss.item()
         if batch % print_every == 0:  # print_every can be, e.g., 10 to print every 10 batches
-            print(f"Epoch [{epoch+1}/{num_epochs}], Batch [{batch}/{len(train_loader)}], Loss: {loss.item():.8f}",'                                                 ',end='\r')
+            print(f"Epoch [{epoch+1}/{num_epochs}], Batch [{batch}/{len(train_loader)}], Loss: {minloss:.8f}",'                                                 ',end='\r')
 
 # Test the network
 model.eval()
@@ -256,7 +258,7 @@ with torch.no_grad():
     total = 0
     for inputs, labels in test_loader:
         outputs = model(inputs)
-        #outputs = torch.sigmoid(outputs)
+        outputs = torch.sigmoid(outputs)
         predicted = (outputs > 0.5).float().view(-1)
         total += labels.size(0)
         correct += (predicted == labels).sum().item()
